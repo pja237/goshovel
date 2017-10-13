@@ -5,6 +5,7 @@ import (
 	"net"
     "io"
     "os"
+    "time"
 //    "sort"
     "gopkg.in/yaml.v2"
 )
@@ -33,6 +34,10 @@ func handleConnection(lconn net.Conn, conf *Config) {
 // HERE: call get_next()
     next:=conf.get_next()
     fmt.Println("get_next() == ", next)
+    if next==-1 {
+        fmt.Println("PROBLEM: No available backend servers, aborting this client")
+        return
+    }
     rconn, err:=net.Dial("tcp4",conf.Backends[next].Ip+":"+conf.Backends[next].Port)
     //rconn, err:=net.Dial("tcp4","192.168.0.178:22")
     defer rconn.Close()
@@ -63,6 +68,7 @@ type Server struct {
     Ip string
     Port string
     Enabled bool
+    Monitor int
     connCount int
 }
 
@@ -74,7 +80,8 @@ type Config struct {
 func (c *Config) dump_status() {
     fmt.Println("--------------------------------------------------------------------------------")
     fmt.Println("Goshovel server (from config):")
-    fmt.Println("> ", c.GoShovel.Ip, c.GoShovel.Port, c.GoShovel.Enabled ,c.GoShovel.connCount)
+    //fmt.Println("> ", c.GoShovel.Ip, c.GoShovel.Port, c.GoShovel.Enabled ,c.GoShovel.connCount)
+    fmt.Println("> ", c.GoShovel)
     fmt.Println("Backend servers (from config):")
     for k,v:=range c.Backends {
         fmt.Println("> ",k, " - ", v)
@@ -100,18 +107,62 @@ func (c *Config) dec_sside(s int) {
 
 func (c *Config) get_next() int {
 
+//HERE: fix: situation where there are no available backends. ret -1, handle it!
+//HERE: fix: 1st is disabled with 0 connCount and others have more than 1 connCount
+//HERE: THIS SUCKS, rewrite
     ret:=0
-    min:=c.Backends[ret].connCount
+    //min:=c.Backends[ret].connCount
     for i,v:=range c.Backends {
-        fmt.Println(i," - ",v)
-        if v.Enabled==true && v.connCount<min {
+        if v.Enabled==true {
             ret=i
-            min=v.connCount
+            //min=c.Backends[i].connCount
+            break
         }
     }
-    fmt.Println(ret, min)
+    for i,v:=range c.Backends {
+        fmt.Println(i," - ",v)
+        if v.Enabled==true && v.connCount<=c.Backends[ret].connCount{
+            ret=i
+            //min=v.connCount
+        }
+    }
+    fmt.Println(ret, c.Backends[ret].connCount)
 
+    if c.Backends[ret].Enabled==false {
+        return -1
+    }
     return ret
+}
+
+func (c *Config) check_gopher(i int, t int) {
+    fmt.Println("??Check_gopher ", i, "reporting for duty!")
+    for {
+        rconn, err:=net.Dial("tcp4",c.Backends[i].Ip+":"+c.Backends[i].Port)
+        if err!=nil {
+            if c.Backends[i].Enabled==true {
+                fmt.Println("??Check_gopher ", i," found problem with server conn: ",c.Backends[i])
+                fmt.Println(c.Backends[i].Enabled)
+                c.Backends[i].Enabled=false
+            }
+        } else {
+            if c.Backends[i].Enabled==false {
+                fmt.Println("??Check_gopher ", i," found no problems with server conn: ",c.Backends[i])
+                c.Backends[i].Enabled=true
+            }
+            rconn.Close()
+        }
+        time.Sleep(time.Duration(t)*time.Second)
+    }
+
+    fmt.Println("??Check_gopher ", i, "finished!")
+}
+
+func (c *Config) monitor() {
+    fmt.Println("?Monitor start spawning check_gophers")
+    for i,_:=range c.Backends {
+        go c.check_gopher(i, c.GoShovel.Monitor)
+    }
+    fmt.Println("?Monitor finished spawning check-gophers")
 }
 
 func main() {
@@ -142,6 +193,7 @@ func main() {
     fmt.Println("Unmarshal err = ", e)
 
     conf.dump_status()
+    conf.monitor()
 
     // starting with the networking stuff
     fmt.Println("Starting listener...")
