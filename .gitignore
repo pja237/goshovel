@@ -1,0 +1,5 @@
+*.exe
+*.swp
+bin/
+pkg/
+src/gopkg.in/
