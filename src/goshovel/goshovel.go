@@ -5,7 +5,7 @@ import (
 	"net"
     "io"
     "os"
-    "sort"
+//    "sort"
     "gopkg.in/yaml.v2"
 )
 
@@ -29,17 +29,20 @@ func handleConnection(lconn net.Conn, conf *Config) {
 	defer lconn.Close()
 	fmt.Println("Got connection from ", lconn.RemoteAddr())
 
-// HERE: call get_next()
     // open connection to backend (R-side) server
-    rconn, err:=net.Dial("tcp4","192.168.0.178:22")
+// HERE: call get_next()
+    next:=conf.get_next()
+    fmt.Println("get_next() == ", next)
+    rconn, err:=net.Dial("tcp4",conf.Backends[next].Ip+":"+conf.Backends[next].Port)
+    //rconn, err:=net.Dial("tcp4","192.168.0.178:22")
     defer rconn.Close()
     if err!=nil {
         fmt.Println(err)
-        // HERE: disable backend server
+        // HERE: disable backend server (enabled=false) instead of panic
         panic("ERROR: net.Dial()")
     }
     conf.inc_cside()
-    conf.inc_sside("server1")
+    conf.inc_sside(next)
     conf.dump_status()
 
     // do work l->r
@@ -48,7 +51,7 @@ func handleConnection(lconn net.Conn, conf *Config) {
     shovel(rconn, lconn)
 
     conf.dec_cside()
-    conf.dec_sside("server1")
+    conf.dec_sside(next)
     conf.dump_status()
     fmt.Println("EXIT: handleConnection()")
 }
@@ -56,6 +59,7 @@ func handleConnection(lconn net.Conn, conf *Config) {
 
 // set up data struct to unmarshall from config file
 type Server struct {
+    Name string
     Ip string
     Port string
     Enabled bool
@@ -64,7 +68,7 @@ type Server struct {
 
 type Config struct {
     GoShovel Server `yaml:"GoShovel"`
-    Backends map[string]*Server `yaml:"Backends"`
+    Backends []Server `yaml:"Backends"`
 }
 
 func (c *Config) dump_status() {
@@ -86,32 +90,28 @@ func (c *Config) dec_cside() {
     c.GoShovel.connCount--
 }
 
-func (c *Config) inc_sside(s string) {
+func (c *Config) inc_sside(s int) {
     c.Backends[s].connCount++
 }
 
-func (c *Config) dec_sside(s string) {
+func (c *Config) dec_sside(s int) {
     c.Backends[s].connCount--
 }
 
-func (c *Config) get_next() {
-    //fmt.Println("Len: ", len(c.Backends))
-    s:=make([]int, 0, len(c.Backends))
-    for _,v:=range c.Backends {
-        if v.Enabled==true {
-            s=append(s, v.connCount)
+func (c *Config) get_next() int {
+
+    ret:=0
+    min:=c.Backends[ret].connCount
+    for i,v:=range c.Backends {
+        fmt.Println(i," - ",v)
+        if v.Enabled==true && v.connCount<min {
+            ret=i
+            min=v.connCount
         }
     }
-    sort.Ints(s)
+    fmt.Println(ret, min)
 
-    for _,v:=range c.Backends {
-        if v.Enabled==true && v.connCount==s[0] {
-            break
-        }
-    }
-    // open connection to backend (R-side) server
-
-    //fmt.Println("Sorted: ", s)
+    return ret
 }
 
 func main() {
@@ -138,14 +138,13 @@ func main() {
     // fmt.Println(config)
 
     var conf Config
-    yaml.Unmarshal(config, &conf)
+    e:=yaml.Unmarshal(config, &conf)
+    fmt.Println("Unmarshal err = ", e)
 
     conf.dump_status()
-    //conf.get_next()
 
     // starting with the networking stuff
     fmt.Println("Starting listener...")
-	//listen, err := net.Listen("tcp4", ":9999")
 	fmt.Println("Listening on: ",conf.GoShovel.Ip+":"+conf.GoShovel.Port)
 	listen, err := net.Listen("tcp4", conf.GoShovel.Ip+":"+conf.GoShovel.Port)
 	if err != nil {
